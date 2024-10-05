@@ -1,12 +1,5 @@
-//
-//  buffercache.h
-//  BTree
-//
-//  Created by Hao Zhang on 2/11/24.
-//
+#pragma once
 
-#ifndef buffercache_h
-#define buffercache_h
 #include <format>
 #include <map>
 #include <mutex>
@@ -52,4 +45,3 @@ private:
     unsigned char* _ptr;
     std::shared_mutex _rwMutex;
 };
-#endif /* buffercache_h */

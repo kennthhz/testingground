@@ -1,15 +1,9 @@
-//
-//  main.cpp
-//  BTree
-//
-//  Created by Hao Zhang on 1/12/24.
-//
-
 #include <iostream>
 #include "btree.h"
+#include "buffercache.h"
 
 
-BufferCache BufferCache(100);
+ BufferCache BufferCacheInstance(100);
 
 static void test_serialization() {
     unsigned char page[1000];
@@ -20,29 +14,29 @@ static void test_serialization() {
     int i1 = 123456789;
     
     serialize<std::string>(str1, page);
-    pos += get_serialized_size<std::string>(str1);
+    pos += getSerializedSize<std::string>(str1);
     
     serialize(d1, page+pos);
-    pos += get_serialized_size<double>(d1);
+    pos += getSerializedSize<double>(d1);
     
     serialize(i1, page+pos);
-    pos += get_serialized_size<int>(i1);
+    pos += getSerializedSize<int>(i1);
     
     serialize<std::string>(str2, page+pos);
-    pos += get_serialized_size<std::string>(str2);
+    pos += getSerializedSize<std::string>(str2);
     
     pos = 0;
     auto str1d = deserialize<std::string>(page + pos);
     assert(str1 == str1d);
-    pos += get_serialized_size<std::string>(str1d);
+    pos += getSerializedSize<std::string>(str1d);
     
     auto d1d = deserialize<double>(page + pos);
     assert(d1 = d1d);
-    pos += get_serialized_size<double>(d1d);
+    pos += getSerializedSize<double>(d1d);
     
     auto i1d = deserialize<int>(page+pos);
     assert(i1 = i1d);
-    pos += get_serialized_size<int>(i1d);
+    pos += getSerializedSize<int>(i1d);
     
     auto str2d = deserialize<std::string>(page + pos);
     assert(str2 == str2d);
@@ -51,11 +45,11 @@ static void test_serialization() {
 
 void test_root_node() {
     unsigned char* page;
-    auto rootPid = BufferCache.init_next_free_page(&page);
+    auto rootPid = BufferCacheInstance.init_next_free_page(&page);
     assert(rootPid == 0);
     //auto node = reinterpret_cast<BTreeNode<int,int>*>(page);
-    auto node = new BTreeNode<int,int>();
-    node->insert(1,1, false);
+    BTreeNode<int,int> *node = new BTreeNode<int,int>();
+    node->insert(1, 1, false);
     // node->insert(1,1);
     //node->insert(2,2);
     //node->insert(3,3);

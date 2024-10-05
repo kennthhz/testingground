@@ -17,30 +17,30 @@ static void test_serialization() {
     int i1 = 123456789;
     
     serialize<std::string>(str1, page);
-    pos += get_serialized_size<std::string>(str1);
+    pos += getSerializedSize<std::string>(str1);
     
     serialize<double>(d1, page+pos);
-    pos += get_serialized_size<double>(d1);
+    pos += getSerializedSize<double>(d1);
     
     serialize<int>(i1, page+pos);
-    pos += get_serialized_size<int>(i1);
+    pos += getSerializedSize<int>(i1);
     
     serialize<std::string>(str2, page+pos);
-    pos += get_serialized_size<std::string>(str2);
+    pos += getSerializedSize<std::string>(str2);
     
     /*
     pos = 0;
     auto str1d = deserialize<std::string>(page + pos);
     assert(str1 == str1d);
-    pos += get_serialized_size<std::string>(str1d);
+    pos += getSerializedSize<std::string>(str1d);
     
     auto d1d = deserialize<double>(page + pos);
     assert(d1 = d1d);
-    pos += get_serialized_size<double>(d1d);
+    pos += getSerializedSize<double>(d1d);
     
     auto i1d = deserialize<double>(page+pos);
     assert(i1 = i1d);
-    pos += get_serialized_size<int>(i1d);
+    pos += getSerializedSize<int>(i1d);
     
     auto str2d = deserialize<std::string>(page + pos);
     assert(str2 == str2d);*/

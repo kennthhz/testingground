@@ -1,21 +1,16 @@
-//
-//  btree.h
-//  BTree
-//
-//  Created by Hao Zhang on 1/12/24.
-//
+#pragma once
 
-#ifndef btree_h
-#define btree_h
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <type_traits>
 #include <typeinfo>
 #include <format>
-
 #include "buffercache.h"
+
+extern BufferCache BufferCacheInstance;
 
 const uint32_t InvalidPid = UINT32_MAX;
 const uint16_t RootNode = 0x0;
@@ -95,61 +90,168 @@ struct FindResult {
 
 template <typename T>
 inline void serialize(const T& data, unsigned char* addr) {
-    static_assert(std::is_same<T, int>::value ||
+    static_assert(std::is_same<T, int>::value || std::is_same<T, std::string>::value ||
                   std::is_same<T, float>::value || std::is_same<T, double>::value ||
                   std::is_same<T, long double>::value || std::is_same<T, bool>::value ||
                   std::is_same<T, long>::value || std::is_same<T, long long>::value,
                   "Type is not supported");
-    std::memcpy(addr, &data, sizeof(T));
-}
 
-template <>
-inline void serialize<std::string>(const std::string& str, unsigned char* addr) {
-    auto str_size = str.size();
-    std::memcpy(addr, &str_size, sizeof(size_t));
-    std::memcpy(addr + sizeof(size_t), str.data(), str_size);
+    if constexpr (std::is_same_v<T, std::string>) {
+        auto str_size = data.size();
+        std::memcpy(addr, &str_size, sizeof(size_t));
+        std::memcpy(addr + sizeof(size_t), data.data(), str_size);
+    } else {
+        std::memcpy(addr, &data, sizeof(T));
+    }
 }
 
 template <typename T>
 inline const T deserialize(unsigned char* addr) {
-    return *(reinterpret_cast<T*>(addr));
-}
-
-template <>
-inline const std::string deserialize<std::string>(unsigned char* addr) {
-    return std::string(reinterpret_cast<const char*>(addr + sizeof(size_t)), *addr);
+    if constexpr (std::is_same_v<T, std::string>)
+        return std::string(reinterpret_cast<const char*>(addr + sizeof(size_t)), *addr);
+    else
+        return *(reinterpret_cast<T*>(addr));
 }
 
 template <typename T>
-inline const size_t get_serialized_size(const T& data) {
-        return sizeof(T);
-}
-
-template <>
-inline const size_t get_serialized_size(const std::string& str) {
-    return str.size() + sizeof(size_t);
+inline const size_t getSerializedSize(const T& data) { 
+    if constexpr (std::is_same_v<T, std::string>) 
+        return data.size() + sizeof(size_t);
+    else
+        return sizeof(T); 
 }
 
 // BTree node maps to a BTree page which has a fixed length of 8k
 template <typename TKey, typename TVal>
 class BTreeNode {
 public:    
-    uint32_t insert(const TKey& key, const TVal& value, bool foundNode);
-    bool find(const TKey& key, TVal** value);
-    bool remove(const TKey& key);
-    void to_string();
-    void set_header(const BTreePagerHeader& header) { _header = header; }
-    BTreePagerHeader getHeader() { return _header; }
-private:
-    FindResult<TVal> find(const TKey& key, bool forInsert);
+    uint32_t insert(const TKey& key, const TVal& value, bool foundNode = false) {
+        if (!foundNode) {
+            auto findResult = find(key, true);
+            assert(findResult.pid != InvalidPid);
+            
+            if (findResult.pid != _header._pid) {
+                auto pLeafNode = reinterpret_cast<BTreeNode<TKey,TVal>*>(BufferCacheInstance.get(findResult.pid));
+                return pLeafNode->insert(key, value, true);
+            }
+        }
+        
+        // if we are over the fill factor, split the node and insert into the new node
+        // recursively insert the split key into parent node
+        auto needSplit = false;
+        auto freeSpace = MaxPageSlotSpace - (_header._items_count * sizeof(uint16_t) + (PageSize - _header._upper));
+        if (1.0 - (double)freeSpace / MaxPageSlotSpace > MaxFillFactor) {
+            needSplit = true;
+        } else if (sizeof(key) + sizeof(value) >= freeSpace) {
+            needSplit = true;
+        }
+        
+        if (needSplit) {
+            std::runtime_error("Split not implemented yet");
+        } else {
+            // insert into the slot by growing the _upper offset
+            auto keySize = getSerializedSize(key);
+            _header._upper -= keySize + getSerializedSize(value);
+            auto p = reinterpret_cast<unsigned char*>((unsigned char*)this + _header._upper);
+            serialize(key, p);
+            p += keySize;
+            serialize(value, p);
+            
+            // insert into the item offset array by using binary search to find the position.
+            bool append = false;
+            auto pos = findItemInsertPosition(key, &append);
+            auto src =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + pos * sizeof(uint16_t));
+            if (_header._items_count - pos > 0)
+                std::memcpy(src + sizeof(uint16_t), src, _header._items_count - pos);
+            *reinterpret_cast<uint16_t*>(src) = _header._upper;
+            _header._items_count++;
+        }
+        
+        return _header._pid;
+    }
     
+    FindResult<TVal>  find(const TKey& key, bool forInsert) {
+        auto found = false;
+        auto low = 0, mid = -1, high = _header._items_count - 1;
+        while (low <= high) {
+            mid = (low + high) / 2;
+            auto midKey = getItemKey(mid);
+            if (key > midKey)
+                low = mid + 1;
+            else if (key < midKey)
+                high = mid - 1;
+            else {
+                low = mid;
+                found = true;
+                break;
+            }
+        }
+        
+        if (isLeaf()) {
+            if (!forInsert)
+                return found ? FindResult<TVal>(_header._pid, getItemValue(low)) : FindResult<TVal>(InvalidPid);
+            else
+                return FindResult<TVal>(_header._pid);
+        } else {
+            auto pid = low > _header._items_count - 1 ? _header._right_child_pid :
+                (uint32_t)getItemValue(low);
+            auto pNode = reinterpret_cast<BTreeNode<TKey,TVal>*>(BufferCacheInstance.get(pid));
+            return pNode->find(key, forInsert);
+        }
+    }
+
+    bool remove(const TKey& key) { 
+        // TODO: 
+        return true;
+    }
+    
+    void to_string() {
+        std::string nodeType;
+        if ((getHeader()._info & RootNode) == RootNode)
+            nodeType = "Root";
+        if ((getHeader()._info & IntermediateNode) == IntermediateNode)
+            nodeType = "Intermediate";
+        if ((getHeader()._info & LeafNode) == LeafNode) {
+            if (nodeType.size() > 0)
+                nodeType.append(" Leaf");
+            else
+                nodeType = "Leaf";
+        }
+        
+        if (nodeType.size() == 0)
+            throw std::runtime_error("Invalid node type:");
+        
+        std::cout<<"=========="<<getHeader()._pid<<"==========="<<std::endl;
+        std::cout<<"Type:"<<nodeType<<std::endl;
+        std::cout<<"Items Count:"<<getHeader()._items_count<<std::endl;
+        std::cout<<"Parent:"<<getHeader()._p_pid<<std::endl;
+        std::cout<<"Left Sibling:"<<getHeader()._l_pid<<std::endl;
+        std::cout<<"Right Sibling:"<<getHeader()._r_pid<<std::endl;
+        std::cout<<"Slot Offset:"<<getHeader()._upper<<std::endl;
+        std::cout<<"Right Child:"<<getHeader()._right_child_pid<<std::endl;
+        std::cout<<"Keys:"<<std::endl;
+        
+        auto ptr_base = (unsigned char*)(this) + BTreePagerHeaderSize;
+        for (auto i = 0; i < getHeader()._items_count; i++) {
+            auto item_offset = *((uint16_t*)(ptr_base + i * sizeof(uint16_t)));
+            auto ptr_current = (unsigned char*)(this) + item_offset;
+            auto key = deserialize<TKey>(ptr_current);
+            std::cout<<i<<"  "<<"Key:"<<key<<" "<<"Val:"<<deserialize<TVal>(ptr_current + getSerializedSize(key))<<std::endl;
+        }
+    }
+
+    void set_header(const BTreePagerHeader& header) { _header = header; }
+
+    BTreePagerHeader getHeader() { return _header; }
+
+private:
     // Find the key based on item array's position
     const TKey getItemKey (uint16_t index) {
         auto addr =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + index * sizeof(uint16_t));
         if (std::is_same<TKey, int32_t>::value || std::is_same<TKey, uint32_t>::value)
             return *(reinterpret_cast<TKey*>(addr));
         else if (std::is_same<TKey, std::string>::value)
-            return deserialize<std::string>(addr);
+            return deserialize<TKey>(addr);
         else
             throw std::runtime_error("Not supported TKey type:" + std::string(typeid(TKey).name()));
     }
@@ -161,27 +263,41 @@ private:
     
     bool isLeaf() { return true; }
     
-    uint16_t findItemInsertPosition(const TKey& key, bool* append);
+    uint16_t findItemInsertPosition(const TKey& key, bool* append) {
+        auto low = 0;
+        auto high = _header._items_count - 1;
+        *append = false;
+
+        if (key > getItemKey(high)) {
+            *append = true;
+            return high + 1;
+        } else if (key < getItemKey(low)) {
+            return low;
+        } else {
+            auto mid = (low + high) / 2;
+            while (low <= high) {
+                mid = (low + high) / 2;
+                auto midKey = getItemKey(mid);
+                if (key > midKey)
+                    low = mid + 1;
+                else if (key < midKey)
+                    high = mid - 1;
+                else {
+                    low = mid;
+                    break;
+                }
+            }
+            
+            return low;
+        }
+    }
     
     BTreePagerHeader _header; // 40 bytes
 };
 
-
-/*
-static void setUInt16AtAddress(unsigned char* address, uint16_t value) {
-    // Copy the bytes of uint16_t value to the memory address
-    address[0] = static_cast<unsigned char>(value & 0xFF);       // Low byte
-    address[1] = static_cast<unsigned char>((value >> 8) & 0xFF); // High byte
-}*/
 
 template <typename TKey, typename TVal>
 static BTreeNode<TKey, TVal> GetBTreeNode(uint32_t pid) {
     return BTreeNode<TKey, TVal>();
 }
 
-/*
-template <typename TKey, typename TVal>
-static BTreeNode<TKey, TVal> deserializeBTreeNodeBuffer(const unsigned char* buffer) {
-    reinterpret_cast<BTreeNode<TKey, TVal>*>(buffer);
-}*/
-#endif /* btree_h */
