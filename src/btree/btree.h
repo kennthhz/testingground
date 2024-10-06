@@ -13,20 +13,27 @@
 extern BufferCache BufferCacheInstance;
 
 const uint32_t InvalidPid = UINT32_MAX;
-const uint16_t RootNode = 0x0;
-const uint16_t IntermediateNode = 0x1;
-const uint16_t LeafNode = 0x3;
+const uint16_t RootNode = 0x1;
+const uint16_t IntermediateNode = 0x2;
+const uint16_t LeafNode = 0x4;
+const uint16_t unUsed = 0x8; 
+const uint16_t exNodeTypeMask = ~(RootNode | IntermediateNode | LeafNode | unUsed);
 const double MaxFillFactor = 0.9;
 
-constexpr bool IsRootNode(uint16_t info) {
+static void SetNodeType (uint16_t *info, uint16_t type) {
+    *info &= exNodeTypeMask;
+    *info |= type;
+}
+
+static bool IsRootNode(uint16_t info) {
     return (info & RootNode) == RootNode;
 }
 
-constexpr bool IsIntermiediateNode(uint16_t info) {
+static bool IsIntermiediateNode(uint16_t info) {
     return (info & IntermediateNode) == IntermediateNode;
 }
 
-constexpr bool IsLeafNode(uint16_t info) {
+static bool IsLeafNode(uint16_t info) {
     return (info & LeafNode) == LeafNode;
 }
 
@@ -151,19 +158,25 @@ public:
         } else {
             // insert into the slot by growing the _upper offset
             auto keySize = getSerializedSize(key);
-            _header._upper -= keySize + getSerializedSize(value);
-            auto p = reinterpret_cast<unsigned char*>((unsigned char*)this + _header._upper);
-            serialize(key, p);
-            p += keySize;
-            serialize(value, p);
+            auto valueSize = getSerializedSize(value);
+            auto currentPos = reinterpret_cast<unsigned char*>((unsigned char*)this + _header._upper - (keySize + valueSize));
+            serialize(key, currentPos);
+            currentPos += keySize;
+            serialize(value, currentPos);
+            _header._upper -= keySize + valueSize;
             
             // insert into the item offset array by using binary search to find the position.
             bool append = false;
             auto pos = findItemInsertPosition(key, &append);
             auto src =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + pos * sizeof(uint16_t));
-            if (_header._items_count - pos > 0)
-                std::memcpy(src + sizeof(uint16_t), src, _header._items_count - pos);
-            *reinterpret_cast<uint16_t*>(src) = _header._upper;
+            if (!append) {
+                if (_header._items_count - pos > 0)
+                    std::memcpy(src + sizeof(uint16_t), src, _header._items_count - pos);
+                *reinterpret_cast<uint16_t*>(src) = _header._upper;
+            } else {
+                *reinterpret_cast<uint16_t*>(src) = _header._upper;
+            }
+
             _header._items_count++;
         }
         
@@ -242,18 +255,14 @@ public:
 
     void set_header(const BTreePagerHeader& header) { _header = header; }
 
-    BTreePagerHeader getHeader() { return _header; }
+    BTreePagerHeader* getHeader() { return &_header; }
 
 private:
     // Find the key based on item array's position
     const TKey getItemKey (uint16_t index) {
         auto addr =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + index * sizeof(uint16_t));
-        if (std::is_same<TKey, int32_t>::value || std::is_same<TKey, uint32_t>::value)
-            return *(reinterpret_cast<TKey*>(addr));
-        else if (std::is_same<TKey, std::string>::value)
-            return deserialize<TKey>(addr);
-        else
-            throw std::runtime_error("Not supported TKey type:" + std::string(typeid(TKey).name()));
+        auto offset = reinterpret_cast<uint16_t*>(addr);
+        return deserialize<TKey>(reinterpret_cast<unsigned char*>((unsigned char*)this + *offset));
     }
     
     TVal getItemValue(uint16_t index) {
@@ -268,7 +277,11 @@ private:
         auto high = _header._items_count - 1;
         *append = false;
 
-        if (key > getItemKey(high)) {
+        if (high < 0) {
+            *append = true;
+            return 0;
+        }
+        else if (key > getItemKey(high)) {
             *append = true;
             return high + 1;
         } else if (key < getItemKey(low)) {

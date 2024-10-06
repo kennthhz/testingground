@@ -15,7 +15,7 @@ public:
         _ptr = new unsigned char[_pages * PageSize];
     }
     
-    uint32_t init_next_free_page(unsigned char** page) {
+    uint32_t initNextFreePage(unsigned char** page) {
         std::unique_lock<std::shared_mutex> lock(_rwMutex);
         auto pid = 0;
         if (_freeList.size() > 0) {

@@ -5,7 +5,7 @@
 
  BufferCache BufferCacheInstance(100);
 
-static void test_serialization() {
+static void testSerialization() {
     unsigned char page[1000];
     auto pos = 0;
     auto str1 = "This is a test string";
@@ -40,24 +40,32 @@ static void test_serialization() {
     
     auto str2d = deserialize<std::string>(page + pos);
     assert(str2 == str2d);
+
+    std::cout<<"testSerialization succeeded"<<"\n";
 }
 
 
-void test_root_node() {
+void testRootOnly() {
     unsigned char* page;
-    auto rootPid = BufferCacheInstance.init_next_free_page(&page);
-    assert(rootPid == 0);
-    //auto node = reinterpret_cast<BTreeNode<int,int>*>(page);
-    BTreeNode<int,int> *node = new BTreeNode<int,int>();
-    node->insert(1, 1, false);
-    // node->insert(1,1);
-    //node->insert(2,2);
-    //node->insert(3,3);
+    auto pid = BufferCacheInstance.initNextFreePage(&page);
+    auto btreeNode = reinterpret_cast<BTreeNode<int,int>*>(page);
+    SetNodeType(&(btreeNode->getHeader()->_info), RootNode | LeafNode);
+    btreeNode->getHeader()->_upper = PageSize;
+    assert(IsRootNode(btreeNode->getHeader()->_info) && IsLeafNode(btreeNode->getHeader()->_info)
+        && !IsIntermiediateNode(btreeNode->getHeader()->_info));
+
+    auto result = btreeNode->find(1, false);
+    assert(result.pid == InvalidPid);
+
+    btreeNode->insert(1,101);
+    result = btreeNode->find(1, false);
+    
+    std::cout<<"testRootOnly succeeded"<<"\n";
 }
 
 int main(int argc, const char * argv[]) {
-    //test_serialization();
-    test_root_node();
+    testSerialization();
+    testRootOnly();
 }
 
 /*
