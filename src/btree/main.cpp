@@ -51,6 +51,7 @@ void testRootOnly() {
     auto btreeNode = reinterpret_cast<BTreeNode<int,int>*>(page);
     SetNodeType(&(btreeNode->getHeader()->_info), RootNode | LeafNode);
     btreeNode->getHeader()->_upper = PageSize;
+    btreeNode->getHeader()->_padding = PageHeaderPadding;
     assert(IsRootNode(btreeNode->getHeader()->_info) && IsLeafNode(btreeNode->getHeader()->_info)
         && !IsIntermiediateNode(btreeNode->getHeader()->_info));
 
@@ -61,6 +62,7 @@ void testRootOnly() {
     result = btreeNode->find(3, false);
     assert(result.pid == 0 && result.data == 103);
 
+    btreeNode->insert(2,102);
     btreeNode->insert(4,104);
     result = btreeNode->find(2, false);
     assert(result.pid == 0 && result.data == 102);

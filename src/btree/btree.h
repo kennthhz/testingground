@@ -13,6 +13,7 @@
 extern BufferCache BufferCacheInstance;
 
 const uint32_t InvalidPid = UINT32_MAX;
+const uint16_t PageHeaderPadding = 0xEFEF;
 const uint16_t RootNode = 0x1;
 const uint16_t IntermediateNode = 0x2;
 const uint16_t LeafNode = 0x4;
@@ -54,7 +55,7 @@ struct BTreePagerHeader {
     uint16_t _items_count;
     
     // The offset of top item slot. The slot is growing backward from page end.
-    uint16_t _upper = PageSize;
+    uint16_t _upper;
     
     // Parent PID
     uint32_t _p_pid;
@@ -159,24 +160,21 @@ public:
             // insert into the slot by growing the _upper offset
             auto keySize = getSerializedSize(key);
             auto valueSize = getSerializedSize(value);
-            auto currentPos = reinterpret_cast<unsigned char*>((unsigned char*)this + _header._upper - (keySize + valueSize));
-            serialize(key, currentPos);
-            currentPos += keySize;
-            serialize(value, currentPos);
+            auto currentPtr = reinterpret_cast<unsigned char*>((unsigned char*)this + _header._upper - (keySize + valueSize));
+            serialize(key, currentPtr);
+            currentPtr += keySize;
+            serialize(value, currentPtr);
             _header._upper -= keySize + valueSize;
             
             // insert into the item offset array by using binary search to find the position.
             bool append = false;
             auto pos = findItemInsertPosition(key, &append);
-            auto src =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + pos * sizeof(uint16_t));
-            if (!append) {
-                if (_header._items_count - pos > 0)
-                    std::memcpy(src + sizeof(uint16_t), src, _header._items_count - pos);
-                *reinterpret_cast<uint16_t*>(src) = _header._upper;
-            } else {
-                *reinterpret_cast<uint16_t*>(src) = _header._upper;
-            }
+            auto srcPtr =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + pos * sizeof(uint16_t));
+            if (!append && _header._items_count - pos > 0)
+                std::memcpy(srcPtr + sizeof(uint16_t), srcPtr, (_header._items_count - pos) * sizeof(uint16_t));
 
+            uint16_t *upperPtr = reinterpret_cast<uint16_t*>(srcPtr);
+            *upperPtr = _header._upper;
             _header._items_count++;
         }
         
