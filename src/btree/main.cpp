@@ -1,9 +1,91 @@
 #include <iostream>
+#include <random>
+#include <utility>
+#include <vector>
 #include "btree.h"
 #include "buffercache.h"
 
+BufferCache BufferCacheInstance(100);
 
- BufferCache BufferCacheInstance(100);
+const size_t MaxStrKeyLength = 30;
+const size_t MaxStrValLength = 70;
+constexpr int32_t Min_int32_value = std::numeric_limits<int32_t>::min();
+constexpr int32_t Max_int32_value = std::numeric_limits<int32_t>::max();
+
+// Define the Unicode range (e.g., Basic Latin, Latin-1 Supplement, Cyrillic, etc.)
+const uint32_t Min_utf8_range = 0x0020;  // Space character (start of printable ASCII)
+const uint32_t Max_utf8_range = 0xFFFF;  // Maximum for Basic Multilingual Plane (BMP)
+
+// Function to generate a random Unicode code point
+uint32_t generate_random_unicode_code_point() {
+    // Create random number generator
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    std::uniform_int_distribution<uint32_t> distribution(Min_utf8_range, Max_utf8_range);
+    return distribution(generator);
+}
+
+static std::string code_point_to_utf8(uint32_t code_point) {
+    std::string utf8_string;
+    
+    if (code_point <= 0x7F) {
+        // 1-byte UTF-8
+        utf8_string += static_cast<char>(code_point);
+    } else if (code_point <= 0x7FF) {
+        // 2-byte UTF-8
+        utf8_string += static_cast<char>((code_point >> 6) | 0xC0);
+        utf8_string += static_cast<char>((code_point & 0x3F) | 0x80);
+    } else if (code_point <= 0xFFFF) {
+        // 3-byte UTF-8
+        utf8_string += static_cast<char>((code_point >> 12) | 0xE0);
+        utf8_string += static_cast<char>(((code_point >> 6) & 0x3F) | 0x80);
+        utf8_string += static_cast<char>((code_point & 0x3F) | 0x80);
+    } else if (code_point <= 0x10FFFF) {
+        // 4-byte UTF-8
+        utf8_string += static_cast<char>((code_point >> 18) | 0xF0);
+        utf8_string += static_cast<char>(((code_point >> 12) & 0x3F) | 0x80);
+        utf8_string += static_cast<char>(((code_point >> 6) & 0x3F) | 0x80);
+        utf8_string += static_cast<char>((code_point & 0x3F) | 0x80);
+    }
+    
+    return utf8_string;
+}
+
+// Function to generate a random Unicode string of specified length
+static std::string generateRandomUnicodeString(const size_t maxLength) {
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    std::uniform_int_distribution<int32_t> int32_distribution(0, maxLength);
+    auto length = int32_distribution(generator);
+    std::string result;
+    for (size_t i = 0; i < length; ++i) {
+        uint32_t code_point = generate_random_unicode_code_point();
+        result += code_point_to_utf8(code_point);
+    }
+
+    return result;
+}
+
+template <typename TKey, typename TVal>
+static void generateRandomTestData(const u_int32_t size, std::vector<TKey>& keys, std::vector<TVal>& values) {
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    std::uniform_int_distribution<int32_t> int32_distribution(Min_int32_value, Max_int32_value);
+
+    if constexpr (std::is_same_v<TKey, int32_t>)
+        for (u_int32_t i = 0; i < size; i++)
+            keys.push_back(int32_distribution(generator));
+    else if constexpr (std::is_same_v<TKey, std::string>)
+        for (u_int32_t i = 0; i < size; i++)
+            keys.push_back(generateRandomUnicodeString(MaxStrKeyLength));
+
+    if constexpr (std::is_same_v<TVal, int32_t>)
+        for (u_int32_t i = 0; i < size; i++)
+            values.push_back(int32_distribution(generator));
+    else if constexpr (std::is_same_v<TVal, std::string>)
+        for (u_int32_t i = 0; i < size; i++)
+            values.push_back(generateRandomUnicodeString(MaxStrValLength));
+}
 
 static void testSerialization() {
     unsigned char page[1000];
@@ -44,176 +126,34 @@ static void testSerialization() {
     std::cout<<"testSerialization succeeded"<<"\n";
 }
 
-
-void testRootOnly() {
+void testOneNodeOnly() {
     unsigned char* page;
     auto pid = BufferCacheInstance.initNextFreePage(&page);
-    auto btreeNode = reinterpret_cast<BTreeNode<int,int>*>(page);
+    auto btreeNode = reinterpret_cast<BTreeNode<int32_t,std::string>*>(page);
     SetNodeType(&(btreeNode->getHeader()->_info), RootNode | LeafNode);
     btreeNode->getHeader()->_upper = PageSize;
     btreeNode->getHeader()->_padding = PageHeaderPadding;
     assert(IsRootNode(btreeNode->getHeader()->_info) && IsLeafNode(btreeNode->getHeader()->_info)
         && !IsIntermiediateNode(btreeNode->getHeader()->_info));
 
-    auto result = btreeNode->find(1, false);
-    assert(result.pid == InvalidPid);
+    size_t size = 10;
+    std::vector<int32_t> keys;
+    std::vector<std::string> values;
+    generateRandomTestData<int32_t, std::string>(size, keys, values);
 
-    btreeNode->insert(3,103);
-    result = btreeNode->find(3, false);
-    assert(result.pid == 0 && result.data == 103);
+    for (auto i = 0; i < size; i++)
+        btreeNode->insert(keys[i], values[i]);
 
-    btreeNode->insert(2,102);
-    btreeNode->insert(4,104);
-    result = btreeNode->find(2, false);
-    assert(result.pid == 0 && result.data == 102);
-    result = btreeNode->find(3, false);
-    assert(result.pid == 0 && result.data == 103);
-    result = btreeNode->find(4, false);
-    assert(result.pid == 0 && result.data == 104);
+    for (auto i = 0; i < size; i++) {
+        auto result = btreeNode->find(keys[i], false);
+        assert(result.pid == 0 && result.data == values[i]);
+    }
 
     std::cout<<"testRootOnly succeeded"<<"\n";
 }
 
 int main(int argc, const char * argv[]) {
     testSerialization();
-    testRootOnly();
+    testOneNodeOnly();
 }
-
-/*
-template <typename TKey, typename TVal>
-void createBTPage(unsigned char* ptr, 
-                  uint32_t pid,
-                  uint32_t p_pid,
-                  uint32_t l_pid,
-                  uint32_t r_pid,
-                  const std::vector<std::tuple<TKey, TVal>>* kvPairs,
-                  uint16_t nodeType) {
-    
-    BTreePagerHeader header;
-    header._info = nodeType;
-    header._version = 1;
-    header._fillFactor = 80;
-    header._items_count = kvPairs->size();
-    header._crc = 0xF0F0F0F0;
-    header._pid = pid;
-    header._p_pid = p_pid;
-    header._l_pid = l_pid;
-    header._r_pid = r_pid;
-    header._upper = PageSize;
-    header._padding = 0xFFFF;
-    
-    for (auto& [index, pair] : *kvPairs) {
-        if (std::get<0>(pair) != UINT32_MAX) {
-            auto keySize = getSerializedKeySize(std::get<0>(pair));
-            auto valueSize = getSerializedValue(std::get<1>(pair));
-            auto keyValueSize = (keySize + valueSize);
-            auto itemOffSet = PageSize - (index+1) * keyValueSize;
-            serializeKey(std::get<0>(pair), static_cast<unsigned char*>(ptr + itemOffSet));
-            serializeValue(std::get<1>(pair), static_cast<unsigned char*>(ptr + itemOffSet + keySize));
-            header._upper -= keyValueSize;
-            
-            auto indexPointer = static_cast<void*>(ptr + sizeof(BTreePagerHeader) +  index * sizeof(uint16_t));
-            *reinterpret_cast<uint16_t*>(indexPointer) = header._upper ;
-        } else {
-            assert(nodeType != LeafNode);
-            header._right_child_pid = std::get<1>(pair);
-        }
-    }
-}
-
-
-
-void test(){
-    auto pgNumber = 0;
-    auto ptr = new unsigned char[10 * PageSize];
-    auto rootKvs = std::make_shared<std::vector<std::tuple<uint32_t, uint32_t>>>();
-    rootKvs->emplace_back(100, 0);
-    rootKvs->emplace_back(UINT32_MAX, 1);
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, pgNumber, UINT32_MAX, UINT32_MAX, rootKvs.get(), RootNode);
-    pgNumber++;
-    
-    auto interKvs1 = std::make_shared<std::vector<std::tuple<uint32_t, uint32_t>>>();
-    interKvs1->emplace_back(30, 3);
-    interKvs1->emplace_back(60, 4);
-    interKvs1->emplace_back(UINT32_MAX, 5);
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 0, UINT32_MAX, UINT32_MAX, interKvs1.get(), IntermediateNode);
-    pgNumber++;
-    
-    auto interKvs2 = std::make_shared<std::vector<std::tuple<uint32_t, uint32_t>>>();
-    interKvs2->emplace_back(200, 6);
-    interKvs2->emplace_back(400, 7);
-    interKvs2->emplace_back(UINT32_MAX, 8);
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 0, UINT32_MAX,  UINT32_MAX, interKvs2.get(), IntermediateNode);
-    pgNumber++;
-    
-    auto leafKvs3 = std::make_shared<std::vector<std::tuple<uint32_t, std::string>>>();
-    leafKvs3->emplace_back(10, "10AAA");
-    leafKvs3->emplace_back(20, "20BBB");
-    leafKvs3->emplace_back(30, "30CCC");
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 1, UINT32_MAX, 4, leafKvs3.get(), LeafNode);
-    pgNumber++;
-    
-    auto leafKvs4 = std::make_shared<std::vector<std::tuple<uint32_t, std::string>>>();
-    leafKvs4->emplace_back(41, "41DDD");
-    leafKvs4->emplace_back(45, "45EEE");
-    leafKvs4->emplace_back(60, "60FFF");
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 1, 3, 5, leafKvs4.get(), LeafNode);
-    pgNumber++;
-    
-    auto leafKvs5 = std::make_shared<std::vector<std::tuple<uint32_t, std::string>>>();
-    leafKvs5->emplace_back(70, "70adfasd");
-    leafKvs5->emplace_back(90, "90EghsfEE");
-    leafKvs5->emplace_back(100, "100FFghdgfhF");
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 1, 4, 6, leafKvs5.get(), LeafNode);
-    pgNumber++;
-    
-    auto leafKvs6 = std::make_shared<std::vector<std::tuple<uint32_t, std::string>>>();
-    leafKvs6->emplace_back(130, "130adfasd");
-    leafKvs6->emplace_back(145, "145EghsfEE");
-    leafKvs6->emplace_back(200, "200FFghdgfhF");
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 2, 5, 7, leafKvs6.get(), LeafNode);
-    pgNumber++;
-    
-    auto leafKvs7 = std::make_shared<std::vector<std::tuple<uint32_t, std::string>>>();
-    leafKvs7->emplace_back(256, "256adfasd");
-    leafKvs7->emplace_back(345, "345EghsfEE");
-    leafKvs7->emplace_back(400, "400FFghdgfhF");
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 2, 6, 8, leafKvs7.get(), LeafNode);
-    pgNumber++;
-    
-    auto leafKvs8 = std::make_shared<std::vector<std::tuple<uint32_t, std::string>>>();
-    leafKvs8->emplace_back(1245, "1245adfasd");
-    leafKvs8->emplace_back(5001, "5001adfasd");
-    createBTPage(ptr + pgNumber * PageSize, pgNumber, 2, 7, UINT32_MAX, leafKvs8.get(), LeafNode);
-}
-
-int main(int argc, const char * argv[]) {
-    
-    BTreePagerHeader header;
-    header._info = 0xFFFF;
-    header._version = 1;
-    header._fillFactor = 80;
-    header._items_count = 0;
-    header._upper = 1024;
-    header._p_pid = 1;
-    header._l_pid = UINT32_MAX;
-    header._r_pid = 2;
-    header._crc = 0xF0F0F0F0;
-    header._pid = 2;
-    header._right_child_pid = 3;
-    header._padding = 0xFFFF;
-    
-    std::shared_ptr<BTreeNode<int32_t, int32_t>> node = 
-        std::make_shared<BTreeNode<int32_t, int32_t>>();
-    node->set_header(header);
-    
-    unsigned char *byteArray = new unsigned char[4096];
-    
-    std::cout<<"Size of BTreePagerHeader is "<<sizeof(BTreePagerHeader)<<"\n";
-    std::memcpy(byteArray, &header, sizeof(BTreePagerHeader));
-    std::memset(byteArray + sizeof(BTreePagerHeader), 0xFF, 4096 - sizeof(BTreePagerHeader));
-    
-    BTreeNode<int32_t, int32_t>* p = reinterpret_cast<BTreeNode<int32_t, int32_t>*>(byteArray);
-    std::cout<<"Fill factor:"<<p->getHeader()._fillFactor<<"\n";
-}*/
 

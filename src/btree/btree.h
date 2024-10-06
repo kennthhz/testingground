@@ -181,7 +181,7 @@ public:
         return _header._pid;
     }
     
-    FindResult<TVal>  find(const TKey& key, bool forInsert) {
+    FindResult<TVal> find(const TKey& key, bool forInsert) {
         auto found = false;
         auto low = 0, mid = -1, high = _header._items_count - 1;
         while (low <= high) {
@@ -216,7 +216,7 @@ public:
             else {
                 TVal data;
                 getItemKeyValue(low, &data);
-                pid = (uint32_t)data;
+                // pid = (uint32_t)data; TODO: for intermediate node the data type must be dynamic cast or will fail compiling.
             }
             auto pNode = reinterpret_cast<BTreeNode<TKey,TVal>*>(BufferCacheInstance.get(pid));
             return pNode->find(key, forInsert);
