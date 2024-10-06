@@ -188,7 +188,7 @@ public:
         auto low = 0, mid = -1, high = _header._items_count - 1;
         while (low <= high) {
             mid = (low + high) / 2;
-            auto midKey = getItemKey(mid);
+            auto midKey = getItemKeyValue(mid, nullptr);
             if (key > midKey)
                 low = mid + 1;
             else if (key < midKey)
@@ -201,13 +201,25 @@ public:
         }
         
         if (isLeaf()) {
-            if (!forInsert)
-                return found ? FindResult<TVal>(_header._pid, getItemValue(low)) : FindResult<TVal>(InvalidPid);
-            else
+            if (!forInsert) {
+                if (found) {
+                    TVal data;
+                    getItemKeyValue(low, &data);
+                    return FindResult<TVal>(_header._pid, data);
+                } else
+                    return FindResult<TVal>(InvalidPid);
+            }
+            else 
                 return FindResult<TVal>(_header._pid);
         } else {
-            auto pid = low > _header._items_count - 1 ? _header._right_child_pid :
-                (uint32_t)getItemValue(low);
+            auto pid = InvalidPid;
+            if (low > _header._items_count - 1)
+                pid = _header._right_child_pid;
+            else {
+                TVal data;
+                getItemKeyValue(low, &data);
+                pid = (uint32_t)data;
+            }
             auto pNode = reinterpret_cast<BTreeNode<TKey,TVal>*>(BufferCacheInstance.get(pid));
             return pNode->find(key, forInsert);
         }
@@ -259,17 +271,18 @@ public:
 
 private:
     // Find the key based on item array's position
-    const TKey getItemKey (uint16_t index) {
+    const TKey getItemKeyValue (uint16_t index, TVal* data) {
         auto addr =  reinterpret_cast<unsigned char*>(((unsigned char*)this + BTreePagerHeaderSize) + index * sizeof(uint16_t));
-        auto offset = reinterpret_cast<uint16_t*>(addr);
-        return deserialize<TKey>(reinterpret_cast<unsigned char*>((unsigned char*)this + *offset));
+        auto keyOffset = reinterpret_cast<uint16_t*>(addr);
+        auto key = deserialize<TKey>(reinterpret_cast<unsigned char*>((unsigned char*)this + *keyOffset));
+        if (data != nullptr) {
+            auto dataOffset = *keyOffset + getSerializedSize(key);
+            *data = deserialize<TVal>(reinterpret_cast<unsigned char*>((unsigned char*)this + dataOffset));
+        }
+
+        return key;
     }
-    
-    TVal getItemValue(uint16_t index) {
-        // TODO
-        return TVal();
-    }
-    
+
     bool isLeaf() { return true; }
     
     uint16_t findItemInsertPosition(const TKey& key, bool* append) {
@@ -281,16 +294,16 @@ private:
             *append = true;
             return 0;
         }
-        else if (key > getItemKey(high)) {
+        else if (key > getItemKeyValue(high, nullptr)) {
             *append = true;
             return high + 1;
-        } else if (key < getItemKey(low)) {
+        } else if (key < getItemKeyValue(low, nullptr)) {
             return low;
         } else {
             auto mid = (low + high) / 2;
             while (low <= high) {
                 mid = (low + high) / 2;
-                auto midKey = getItemKey(mid);
+                auto midKey = getItemKeyValue(mid, nullptr);
                 if (key > midKey)
                     low = mid + 1;
                 else if (key < midKey)

@@ -57,9 +57,18 @@ void testRootOnly() {
     auto result = btreeNode->find(1, false);
     assert(result.pid == InvalidPid);
 
-    btreeNode->insert(1,101);
-    result = btreeNode->find(1, false);
-    
+    btreeNode->insert(3,103);
+    result = btreeNode->find(3, false);
+    assert(result.pid == 0 && result.data == 103);
+
+    btreeNode->insert(4,104);
+    result = btreeNode->find(2, false);
+    assert(result.pid == 0 && result.data == 102);
+    result = btreeNode->find(3, false);
+    assert(result.pid == 0 && result.data == 103);
+    result = btreeNode->find(4, false);
+    assert(result.pid == 0 && result.data == 104);
+
     std::cout<<"testRootOnly succeeded"<<"\n";
 }
 
